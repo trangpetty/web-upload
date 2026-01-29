@@ -25,7 +25,7 @@
         <h3 class="box-title">{{ $t('citizen.info') }}</h3>
         <div>
           <p class="box-text">- {{ $t('label.name') }}: {{ citizenInfo.fullName ? citizenInfo.fullName : "" }}</p>
-          <p class="box-text">- {{ $t('label.idNumber') }}: {{ citizenInfo.idNumber ? citizenInfo.idNumber : "" }}</p>
+          <p class="box-text">- {{ docLabel }}: {{ citizenInfo.idNumber ? citizenInfo.idNumber : "" }}</p>
           <p class="box-text">- {{ $t('label.phone') }}: {{ citizenInfo.phone ? citizenInfo.phone : "" }}</p>
           <p class="box-text">- {{ $t('label.address') }}: {{ citizenInfo.address ? citizenInfo.address : "" }}</p>
         </div>
@@ -91,6 +91,8 @@ const previewDialog = ref({
   url: '',
   file: null
 })
+
+const docLabel = ref("");
 
 const reportNames: Record<string, Record<number, string>> = {
   vi: {
@@ -257,6 +259,17 @@ onMounted(async () => {
       const lang = params.get("lang") || "vi";
       locale.value = lang;
       language.value = lang;
+
+      const docType = params.get("docType");
+      
+      if (docType === 'cccd') {
+          docLabel.value = lang === 'vi' ? "Số CCCD" : "ID Card Number";
+      } else if (docType === 'passport') {
+          docLabel.value = lang === 'vi' ? "Số Hộ chiếu" : "Passport Number";
+      } else {
+          // Fallback nếu không có param (hoặc trường hợp cũ)
+          docLabel.value = lang === 'vi' ? "Số giấy tờ tùy thân" : "Identity Document Number";
+      }
     }
 
 // Lấy citizen info
