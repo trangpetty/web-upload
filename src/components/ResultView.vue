@@ -54,10 +54,23 @@ onMounted(() => {
 </script>
 
 <style>
-header img {
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  top: 24px;
+}
+.header img {
     width: 48px;
     height: 36px;
 }
+
+.title {
+  font-weight: 700;
+  color: #FCD006;
+}
+
 .icon-container {
   text-align: center;
   margin: 0 auto;

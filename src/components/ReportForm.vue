@@ -42,7 +42,6 @@
           class="custom-upload"
           :auto-upload="false"
           :file-list="fileList"
-          :before-upload="beforeUpload"
           :on-change="handleChange"
           accept="image/*,video/*"
           multiple
@@ -66,17 +65,31 @@
           </video>
         </template>
       </el-dialog>
-      <button class="btn-confirm" :disabled="fileList.length === 0" @click="submitUpload">{{ $t('confirm') }}</button>
+      <div class="error-container" v-if="showLimitError">
+        <el-alert
+          :title="`${$t('text.warning')} ${MAX_TOTAL_SIZE_MB}MB.`"
+          type="error"
+          show-icon
+          :closable="false"
+          class="error-notification"
+        >
+        <template #icon>
+          <WarningFilled />
+        </template>
+        </el-alert>
+      </div>
+      <button type="button" class="btn-confirm" :disabled="fileList.length === 0" @click="submitUpload">{{ $t('confirm') }}</button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import {onMounted, ref, watch} from 'vue'
+import {onMounted, onUnmounted, ref, watch, computed} from 'vue'
 import logo from "@/assets/images/logo.svg"
 import flatVi from "@/assets/images/flag-vi.png"
 import flatEn from "@/assets/images/flag-en.png"
 import {ElMessage} from "element-plus"
+import { WarningFilled } from '@element-plus/icons-vue'
 import axios from "axios";
 import router from "@/router";
 import { useI18n } from 'vue-i18n'
@@ -92,7 +105,23 @@ const previewDialog = ref({
   file: null
 })
 
-const docLabel = ref("");
+const currentType = ref(6);
+const docType = ref("cccd");
+const docLabel = computed(() => {
+  const type = docType.value;
+  if (type === "cccd") {
+    return t('label.idNumber');
+  } 
+  else if (type === "passport") {
+    return t('label.passport');
+  }
+  return t('label.docType'); 
+});
+const showLimitError = ref(false);
+let errorTimeout:any = null;
+const MAX_TOTAL_SIZE_MB = 500;
+const MAX_TOTAL_BYTES = MAX_TOTAL_SIZE_MB * 1024 * 1024;
+const VIDEO_PLACEHOLDER = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2Y1ZjVmNSIvPjxwYXRoIGQ9Ik00MCAzNVYzMEw2NSDidC0yNS0xNVoiIGZpbGw9IiM5MDkzOTkiLz48L3N2Zz4=";
 
 const reportNames: Record<string, Record<number, string>> = {
   vi: {
@@ -118,61 +147,83 @@ const hash = url.split("#")[1];
 let id: string | null = null;
 let type = 6;
 
-// hash = "upload?xxxx?type=6&lang=en"
-if (hash?.startsWith("/upload?")) {
-  const queryString = hash.replace("/upload?", "");
-  const params = new URLSearchParams(queryString);
-
-  // lấy id (chuỗi dài trước ?type=)
-  id = queryString.split("?type=")[0].split("&")[0];
-
-  // lấy type
-  const typeStr = queryString.split("?type=")[1];
-  type = typeStr ? parseInt(typeStr, 10) : 6;
-
-  // lấy lang
-  const lang = queryString.split("lang=")[1] || "vi";
-  locale.value = lang;
-  language.value = lang;
-}
-
-const reportName = getReportName(type, language.value);
+const reportName = computed(() => {
+  return getReportName(currentType.value, language.value);
+});
 
 function getReportName(type: number, lang: string) {
-  console.log("lang =", lang);
-  console.log("type =", type);
-  console.log("reportNames[lang] =", reportNames[lang]);
-  console.log("reportNames[lang]?.[type] =", reportNames[lang]?.[type]);
-  return reportNames[lang]?.[type] || (lang === "vi" ? "Phản ánh khác" : "Other");
+  const list = reportNames[lang] || reportNames['vi'];
+  return list[type] || (lang === 'en' ? "Other" : "Phản ánh khác");
 }
 
-function beforeUpload(file: File) {
-  const isImage = file.type.startsWith("image/");
-  const isVideo = file.type.startsWith("video/");
+const createVideoThumbnail = (file: File): Promise<string> => {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
 
-  const maxImageSize = 20 * 1024 * 1024; // 20MB
-  const maxVideoSize = 100 * 1024 * 1024; // 100MB
+    video.preload = 'metadata';
+    video.src = URL.createObjectURL(file);
+    video.muted = true;
+    video.playsInline = true;
 
-  if (isImage && file.size > maxImageSize) {
-    ElMessage.warning("Ảnh vượt quá 20MB, vui lòng chọn ảnh nhỏ hơn!");
-    return false;
+    video.onloadedmetadata = () => {
+      video.currentTime = video.duration > 1 ? 1 : video.duration / 2;
+    };
+
+    video.onseeked = () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      
+      context?.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageUrl = canvas.toDataURL('image/jpeg', 0.7); // Nén chất lượng 0.7 cho nhẹ
+      URL.revokeObjectURL(video.src);
+      
+      resolve(imageUrl);
+    };
+    
+    video.onerror = () => {
+       resolve('');
+    };
+  });
+};
+
+const handleChange = async (uploadFile, fileListValue) => {
+  const totalSize = fileListValue.reduce((acc, file) => {
+    const fileSize = file.raw?.size || file.size || 0;
+    return acc + fileSize;
+  }, 0);
+
+  if (totalSize > MAX_TOTAL_BYTES) {
+    showLimitError.value = true;
+    if (errorTimeout) {
+      clearTimeout(errorTimeout);
+    }
+
+    errorTimeout = setTimeout(() => {
+      showLimitError.value = false;
+    }, 10000);
+    const allowedFiles = fileListValue.filter(f => f.uid !== uploadFile.uid);
+    fileList.value = allowedFiles;
+    return;
+  } else {
+    if (uploadFile.raw?.type.startsWith('video/')) {
+    uploadFile.url = VIDEO_PLACEHOLDER; 
+
+    try {
+      const thumbUrl = await createVideoThumbnail(uploadFile.raw);
+      
+      if (thumbUrl) {
+        uploadFile.url = thumbUrl;
+      }
+    } catch (e) {
+      console.error("Không tạo được thumbnail", e);
+    }
   }
-
-  if (isVideo && file.size > maxVideoSize) {
-    ElMessage.warning("Video vượt quá 100MB, vui lòng chọn video nhỏ hơn!");
-    return false;
+    showLimitError.value = false;
+    if (errorTimeout) clearTimeout(errorTimeout);
+    fileList.value = fileListValue;
   }
-
-  if (!isImage && !isVideo) {
-    ElMessage.warning("Chỉ chấp nhận ảnh hoặc video!");
-    return false;
-  }
-
-  return true;
-}
-
-const handleChange = (file, fileListValue) => {
-  fileList.value = fileListValue
 }
 
 const changeLanguage = (lang: string) => {
@@ -191,7 +242,8 @@ function handlePreview(file) {
 }
 
 function handleRemove(file, fileListNew) {
-  fileList.value = fileListNew
+  fileList.value = fileListNew;
+  showLimitError.value = false;
 }
 
 function isImage(file) {
@@ -199,7 +251,23 @@ function isImage(file) {
 }
 
 async function submitUpload() {
+  const totalSize = fileList.value.reduce((acc: any, file: any) => {
+    return acc + (file.raw?.size || file.size || 0);
+  }, 0);
+
+  if (totalSize > MAX_TOTAL_BYTES) {
+    showLimitError.value = true; 
+    errorTimeout = setTimeout(() => {
+      showLimitError.value = false;
+    }, 10000);
+    return;
+  }
+  
+  showLimitError.value = false;
+
   loading.value = true;
+    if (errorTimeout) clearTimeout(errorTimeout);
+
   const fileObjs = fileList.value.map(
       (item: any) => item.raw || item.originFileObj || item
   );
@@ -235,6 +303,10 @@ watch(locale, () => {
   updatePageTitle();
 });
 
+onUnmounted(() => {
+  if (errorTimeout) clearTimeout(errorTimeout);
+});
+
 onMounted(async () => {
   updatePageTitle();
   try {
@@ -246,30 +318,28 @@ onMounted(async () => {
     // hash = "upload?xxxx?type=6&lang=en"
     if (hash?.startsWith("/upload?")) {
       const queryString = hash.replace("/upload?", "");
-      const params = new URLSearchParams(queryString);
+      let paramsStr = queryString;
+      if (queryString.includes("?")) {
+          // Lấy phần sau dấu ? thứ 2 (type=1&lang=en...)
+          paramsStr = queryString.split("?")[1]; 
+      }
+      
+      // Lúc này paramsStr sạch sẽ, chỉ chứa các tham số
+      const params = new URLSearchParams(paramsStr);
 
-      // lấy id (chuỗi dài trước ?type=)
+      // Lấy ID: vẫn giữ logic cũ
       id = queryString.split("?type=")[0].split("&")[0];
 
-      // lấy type
+      // Lấy Type: Giờ sẽ hoạt động đúng
       const typeStr = params.get("type");
-      type = typeStr ? parseInt(typeStr, 10) : null;
+      currentType.value = typeStr ? parseInt(typeStr, 10) : 6;
 
-      // lấy lang
+      // Lấy Lang
       const lang = params.get("lang") || "vi";
       locale.value = lang;
       language.value = lang;
 
-      const docType = params.get("docType");
-      
-      if (docType === 'cccd') {
-          docLabel.value = lang === 'vi' ? "Số CCCD" : "ID Card Number";
-      } else if (docType === 'passport') {
-          docLabel.value = lang === 'vi' ? "Số Hộ chiếu" : "Passport Number";
-      } else {
-          // Fallback nếu không có param (hoặc trường hợp cũ)
-          docLabel.value = lang === 'vi' ? "Số giấy tờ tùy thân" : "Identity Document Number";
-      }
+      docType.value = params.get("docType");
     }
 
 // Lấy citizen info
@@ -412,5 +482,25 @@ onMounted(async () => {
 .custom-upload .el-upload-list--picture-card .el-upload-list__item {
   height: 80px !important;
   width: 80px !important;
+}
+
+.error-notification {
+  width: 100%;
+  top: auto !important;   
+  background-color: #D11C0E1A!important; 
+}
+
+.error-notification .el-message__content {
+  line-height: 1.5;
+}
+
+.error-notification.el-alert--error.is-light {
+  color: #000!important;
+}
+
+.error-notification.el-alert .el-alert__icon {
+  width: 32px!important;
+  color: #E41606;
+  font-size: 32px!important;
 }
 </style>
